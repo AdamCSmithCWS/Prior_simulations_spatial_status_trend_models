@@ -4,153 +4,21 @@ setwd("C:/GitHub/GAMYE_Elaboration")
 library(tidyverse)
 library(patchwork)
 
-
-bbs_indices_usgs <- read.csv("data/Index_best_1966-2019_core_best.csv",
-                             colClasses = c("integer",
-                                            "character",
-                                            "integer",
-                                            "numeric",
-                                            "numeric",
-                                            "numeric"))
-
-bbs_inds <- bbs_indices_usgs %>% 
-  filter(Region == "SU1" |
-           !grepl(x = Region, pattern = "[[:digit:]]")) #just hte continental estimates
-
-# function to calculate a %/year trend from a count-scale trajectory
-trs <- function(y1,y2,ny){
-  tt <- (((y2/y1)^(1/ny))-1)*100
-}
-
-miny = min(bbs_inds$Year)
-maxy = max(bbs_inds$Year)
-bbs_trends <- NULL
-
-for(tl in c(2,6,11,21,54)){ #estimating all possible 1-year, 2-year, 5-year, 10-year, and 20-year trends, with no uncertainty, just the point estimates based on the comparison of posterior means fo annual indices
-  ny = tl-1
-  yrs1 <- seq(miny,(maxy-ny),by = 1)
-  yrs2 <- yrs1+ny
-  for(j in 1:length(yrs1)){
-    y2 <- yrs2[j]
-    y1 <- yrs1[j]
-    
-    nyh2 <- paste0("Y",y2)
-    nyh1 <- paste0("Y",y1)
-    
-    tmp <- bbs_inds %>% 
-      filter(Year %in% c(y1,y2)) %>% 
-      select(AOU,Index,Year,Region) %>% 
-      pivot_wider(.,names_from = Year,
-                  values_from = Index,
-                  names_prefix = "Y") %>%
-      rename_with(.,~gsub(pattern = nyh2,replacement = "YE", .x)) %>% 
-      rename_with(.,~gsub(pattern = nyh1,replacement = "YS", .x)) %>% 
-      drop_na() %>% 
-      group_by(AOU,Region) %>% 
-      summarise(trend = trs(YS,YE,ny),
-                .groups = "keep")%>% 
-      mutate(first_year = y1,
-             last_year = y2,
-             nyears = ny,
-             abs_trend = abs(trend),
-             t_years = paste0(ny,"-year trends"))
-    
-    bbs_trends <- bind_rows(bbs_trends,tmp)
-  }
-}
-
-t_quants <- bbs_trends %>% 
-  group_by(t_years,Region) %>% 
-  summarise(x99 = quantile(abs_trend,0.99),
-            x995 = quantile(abs_trend,0.995))
-
-bbs_trends <- bbs_trends %>% 
-  mutate(t_years = factor(t_years,
-                          levels = c("1-year trends",
-                                     "5-year trends",
-                                     "10-year trends",
-                                     "20-year trends",
-                                     "53-year trends"),
-                          ordered = TRUE))
-
-bbs_continental_trends <- bbs_trends %>% 
-  filter(Region == "SU1")
-bbs_politic_trends <- bbs_trends %>% 
-  filter(Region != "SU1")
-
-
-freq_brks <- c(0,seq(1,100,1))
-
-
-realised_bbs_politic_freq <- ggplot(data = bbs_politic_trends,
-                                 aes(abs_trend,after_stat(density)))+
-  geom_freqpoly(breaks = freq_brks,center = 0)+
-  xlab("Absolute value of BBS state/province trends USGS models (1966-2019)")+
-  ylab("")+
-  theme_bw()+
-  coord_cartesian(ylim = c(0,0.7),
-                  xlim = c(0,40))+
-  facet_wrap(vars(t_years),
-             nrow = 1,
-             ncol = 5)
-print(realised_bbs_politic_freq)
-
-
-
-realised_bbs_sw_freq <- ggplot(data = bbs_continental_trends,
-                                 aes(abs_trend,after_stat(density)))+
-  geom_freqpoly(breaks = freq_brks,center = 0)+
-  xlab("Absolute value of BBS survey-wide trends USGS models (1966-2019)")+
-  ylab("")+
-  theme_bw()+
-  coord_cartesian(ylim = c(0,0.7),
-                  xlim = c(0,40))+
-  facet_wrap(vars(t_years),
-             nrow = 1,
-             ncol = 5)
-print(realised_bbs_sw_freq)
-
-
-
-bbs_sd_trends <- bbs_politic_trends %>% 
-  group_by(AOU,t_years) %>% 
-  summarise(sd_trends = sd(trend),
-            min_trend = min(trend),
-            max_trend = max(trend),
-            q5_trend = quantile(trend,0.05),
-            q95_trend = quantile(trend,0.95),
-            .groups = "keep") %>% 
-  filter(is.finite(sd_trends))
-
-realised_bbs_sd <- ggplot(data = bbs_sd_trends,
-                                    aes(sd_trends,after_stat(density)))+
-  geom_freqpoly(breaks = freq_brks,center = 0)+
-  xlab("SD (by species) of BBS state/province trends USGS models (1966-2019)")+
-  ylab("")+
-  theme_bw()+
-  coord_cartesian(ylim = c(0,0.7),
-                  xlim = c(0,40))+
-  facet_wrap(vars(t_years),
-             nrow = 1,
-             ncol = 5)
-print(realised_bbs_sd)
-
-
-tb_sims <- data.frame(model = c(rep("GAMYE",4),
+tb_sims <- data.frame(model = c(rep("GAMYE",2),
                                 rep("Difference",3)),
-                      spatial = c(TRUE,FALSE,FALSE,TRUE,
-                                  TRUE,FALSE,FALSE),
-                      hierarchical = c(TRUE,TRUE,TRUE,TRUE,
-                                       TRUE,TRUE,FALSE),
-                      fl = paste0(c("Hier_prior_sim_summary",
-                                    "Hier_Non_Spatial_prior_sim_summary",
-                                    "Hier_Non_Spatial_with_YE_prior_sim_summary",
-                                    "Hier_Spatial_with_YE_prior_sim_summary",
-                                    "Hier_Spatial_Difference_prior_sim_summary",
-                                    "Hier_Non_Spatial_Difference_prior_sim_summary",
-                                    "Non_Hierarchical_Difference_prior_sim_summary"),".RData"),
-                      prior_sel = c(1,1,10,20,
-                                    0.1,0.1,0.3))
+                      spatial = c(FALSE,TRUE,
+                                  FALSE,FALSE,TRUE),
+                      hierarchical = c(TRUE,TRUE,
+                                       FALSE,TRUE,TRUE),
+                      model = c("GAMYE_non_spatial_prior.stan",
+                                "GAMYE_spatial_prior.stan",
+                                "first_difference_non_hierarchical_prior.stan",
+                                "first_difference_non_spatial_prior.stan",
+                                "first_difference_spatial_prior.stan"),
+                      prior_time = c(1,1,
+                                    0.2,0.1,0.1),
+                      prior_sd_time = c(10,20,
+                                        ))
 
 
 # Full summary and plotting of all priors ---------------------------------
