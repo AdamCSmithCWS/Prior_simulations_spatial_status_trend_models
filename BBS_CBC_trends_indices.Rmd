@@ -2,7 +2,7 @@
 title: "Variation in BBS and CBC trends"
 author: "Adam C. Smith"
 date: "2022-11-15"
-output: html_document
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -22,7 +22,7 @@ We then compare predicted population trajectories and trend estimates from our s
 ## Load all of the published BBS and CBC trends for the long-term
 
 The USGS and Audubon publish trend estimates for the long-term, starting in the late 1960s. We will use these long-term trend estimates for the regions and time-periods that they are available. 
-```{r trend load, cache=TRUE, eval=FALSE}
+```{r trend load, eval=FALSE}
 
 bbs_trends <- read.csv("data/BBS_1966-2019_core_best_trend.csv") %>% 
   filter(Region == "SU1" |
@@ -58,7 +58,7 @@ To supplement these published trend estimates, we will generate additional estim
 
 Estimates from the program area available at a number of different spatial scales, but for this analysis, we have selected the survey-wide estimates to represent the broadest species-level estimates, and the state/province estimates to represent the spatial variation within species because of their consistent treatment in the two programs.
 
-```{r load trajectories,cache=TRUE,eval=FALSE}
+```{r load trajectories,eval=FALSE}
 
 ## downloaded from https://www.mbr-pwrc.usgs.gov/ on June 13 2022
 bbs_inds <- read.csv("data/Index_best_1966-2019_core_best.csv",
@@ -105,7 +105,7 @@ save(list = "all_inds",
 ```
 
 
-Using the trajectories, we calculate all possible 1-year, 2-year, 5-year, 10-year, 20-year trends, and 50-year trends with no uncertainty, just the point estimates based on the comparison of posterior means of annual indices. These trends are comparable to the end-point trends used in the hierarchical models for the BBS and CBS. 
+Using the trajectories, we calculate all possible 1-year, 2-year, 5-year, 10-year, 20-year trends, and 50-year trends with no uncertainty, just the point estimates based on the comparison of posterior medians of annual indices. These trends are comparable to the end-point trends used in the hierarchical models for the BBS and CBS. 
 
 ```{r calculate_trends, cache = TRUE,eval=FALSE}
 
@@ -157,13 +157,17 @@ for(tl in c(2,6,11,21,51)){ #estimating all possible 1-year, 2-year, 5-year, 10-
 
   load("data/CBC_BBS_published_trends.RData")
 
+ 
   
-  bbs_trends <- bbs_trends %>% 
+  bbs_trends <- bbs_trends %>%
+    rename(trend = Trend) %>% 
     mutate(abs_trend = abs(trend),
            t_years = "50-year trends",
-           Survey = "BBS_Pub") %>% 
+           Survey = "BBS_Pub",
+           AOU = as.character(AOU)) %>% 
     select(abs_trend,trend,Region,AOU,Survey,t_years)
-  cbc_trends <- cbc_trends %>% 
+  cbc_trends <- cbc_trends %>%
+    rename(trend = Trend) %>%  
     mutate(abs_trend = abs(trend),
            t_years = "50-year trends",
            Survey = "CBC_Pub") %>% 
@@ -238,7 +242,9 @@ print(realised_all_sw_freq)
 
 
 ```{r calculate variation in trends}
-all_sd_trends <- all_politic_trends %>% 
+all_sd_trends <- all_politic_trends %>%
+  filter(!(t_years == "1-year trends" & Survey == "CBC"),
+         t_years != "5-year trends") %>% 
   group_by(AOU,t_years,Survey) %>% 
   summarise(sd_trends = sd(trend,na.rm = TRUE),
             min_trend = min(trend,na.rm = TRUE),

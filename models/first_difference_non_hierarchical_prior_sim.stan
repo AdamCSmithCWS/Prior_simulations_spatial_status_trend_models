@@ -72,7 +72,6 @@ if(pnorm == 0){
 
 for(s in 1:(nstrata)){
     beta_raw[s,] ~ std_normal();
-  //sum(beta_raw[s,]) ~ normal(0,0.001*nyears);
 
 }
 

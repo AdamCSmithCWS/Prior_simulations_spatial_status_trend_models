@@ -63,13 +63,12 @@ model {
 
 //Conditional statements to select the prior distribution
 if(pnorm == 1){
- sdBETA ~ normal(0,prior_scale_B); //prior on sd of GAM parameter variation
  sdbeta ~ normal(0,prior_scale_b); //prior on sd of GAM parameter variation
 }
 if(pnorm == 0){
-  sdBETA ~ student_t(df,0,prior_scale_B); //prior on sd of GAM parameter variation
   sdbeta ~ student_t(df,0,prior_scale_b); //prior on sd of GAM parameter variation
 }
+  sdBETA ~ student_t(df,0,prior_scale_B); //prior on sd of GAM parameter variation
 
    BETA_raw ~ normal(0,1); //non-centered parameterisation
 
@@ -78,7 +77,6 @@ if(pnorm == 0){
 for(s in 1:nstrata){
     beta_raw[s,] ~ normal(0,1);
     yeareffect_raw[s,] ~ normal(0,1);
-    sum(yeareffect_raw[s,]) ~ normal(0,0.001*nyears);
 }
 
 

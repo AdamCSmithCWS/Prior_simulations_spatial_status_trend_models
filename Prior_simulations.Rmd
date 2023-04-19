@@ -25,7 +25,7 @@ library(bbsBayes)
 ## Priors for the spline parameters in a thin-plate regression spline basis
 ### Priors for the SD of these parameters among strata
 
-```{r simulated_condictions}
+```{r simulated_condictions, include=FALSE, echo=FALSE}
 
 tb_sims <- data.frame(model = c(rep("gamye",2),
                                 rep("first_difference",3)),
@@ -101,7 +101,8 @@ data_gamye <- list(
         nknots_year = nknots_year,
         year_basis = year_basis,
                 
-        pnorm = 0, #prior is half t-distribution instead of half-normal (if pnorm == 1)
+        pnorm = 1, #sd prior for among strata trend is half t-distribution instead of half-normal (if pnorm == 1)
+
         df = 3 #prior is half t-distribution with this df
   
 )
@@ -126,7 +127,7 @@ data_diff <- list(
         #vector of zeros to fill midyear beta values
         zero_betas = rep(0,nstrata),
         
-        pnorm = 0, #prior is half t-distribution instead of half-normal (if pnorm == 1)
+        pnorm = 1, #sd prior for among strata trend is half t-distribution instead of half-normal (if pnorm == 1)
         df = 3 #prior is half t-distribution with this df
   
 )
@@ -210,9 +211,8 @@ for(i in 1:nrow(tb_sims)){
         parallel_chains = 2,
         #pars = parms,
         adapt_delta = 0.8,
-        max_treedepth = 14,
-        seed = 123,
-        init = 1)
+        max_treedepth = 10,
+        seed = 123)
       
       
       stanfit$save_object(file = paste0("output/",out_base,".rds"))
