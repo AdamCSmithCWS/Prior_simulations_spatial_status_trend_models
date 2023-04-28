@@ -32,7 +32,8 @@ parameters {
   real<lower=0> sdyear[nstrata];    // sd of GAM coefficients among strata 
   matrix[nstrata,nyears] yeareffect_raw;         // GAM strata level parameters
   
-  real<lower=0> sdbeta[nknots_year];    // sd of GAM coefficients among strata 
+  real<lower=0> sdbeta;    // sd of GAM coefficients among strata 
+//  real<lower=0> sdbeta[nknots_year];    // sd of GAM coefficients among strata 
   matrix[nstrata,nknots_year] beta_raw;         // GAM strata level parameters
 
   real<lower=0> sdBETA;    // sd of spline coefficients  
@@ -52,7 +53,7 @@ transformed parameters {
      SMOOTH_pred = year_basis * BETA; //log-scale smooth trajectory
   
   for(k in 1:nknots_year){
-    beta[,k] = (sdbeta[k] * beta_raw[,k]) + BETA[k];
+    beta[,k] = (sdbeta * beta_raw[,k]) + BETA[k];
   }
     
    for(s in 1:nstrata){

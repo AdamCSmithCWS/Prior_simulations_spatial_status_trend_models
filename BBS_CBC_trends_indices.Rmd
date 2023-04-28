@@ -29,7 +29,8 @@ bbs_trends <- read.csv("data/BBS_1966-2019_core_best_trend.csv") %>%
            !grepl(x = Region, pattern = "[[:digit:]]")) %>% # state level names do not have numbers, all others do
   mutate(Region = ifelse(Region == "SU1","Survey_Wide",Region),
          Survey = "BBS",
-         AOU = as.character(AOU)) %>% 
+         AOU = as.character(AOU),
+         se_trend = (X97.5.CI - X2.5.CI)/4) %>% 
   rename(trend = Trend)
 
 
@@ -42,7 +43,9 @@ cbc_trends <- read.csv("data/cbc_trends_abundance_indices_and_scaling_factors_v4
          Region = stratum,
          trend = estimate_mean) %>% 
   mutate(Region = ifelse(Region == "USACAN","Survey_Wide",Region),
-         Survey = "CBC")
+         Survey = "CBC",
+         se_trend = (estimate_ucl-estimate_lcl/4))
+
 
 
 save(list = c("cbc_trends","bbs_trends"),
