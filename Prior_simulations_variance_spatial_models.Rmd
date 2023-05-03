@@ -55,7 +55,7 @@ For omnibus models applied to multi-species surveys like the CBC, BBS, and Shore
 1.  The weakly informative and mildly regularising priors reflect two explicit assumptions:\
     that rates of population change and variation in those rates for any given species are very likely to fall somewhere within the range of comparable parameter estimates for past data from all of the other species in similar monitoring programs.
 
-2.  That extreme trends and extreme levels of variation in trends are particularly unlikely without comparably strong evidence to support those extreme values.
+2.  That extreme trends and extreme levels of variation in trends are unlikely without evidence to support those extreme values.
 
 These simulations demonstrate the distribution of predictions from these models when there are no data.
 Given the broad spatial and temporal scale of these monitoring programs and the 1000s - 100,000s of observations for any given species, these priors are primarily relevant in the most data-sparse regions or time-periods for any given species.
@@ -64,12 +64,12 @@ Given the broad spatial and temporal scale of these monitoring programs and the 
 
 Using the published annual indices of relative abundance (i.e., the population trajectories) published by the USGS and Audubon, we can generate reasonable estimates of the realised distributions for some key population parameters for North American birds.
 Together, these two programs estimate population trajectories and trends for \> 600 species of birds.
-Using these population trajectories we estimated trends in populations at two spatial scales: province/state and survey-wide scales.
+Using these population trajectories we estimated trends in populations at two spatial scales: province/state and survey-wide.
 We estimated the spatial variation in the trends by estimating the standard deviation of province/state trends within species.
 We estimated these trends and spatial variation in trends for a range of temporal scales, including 1-year annual fluctuations, short-term trends, and long-term trends.
 
 We then compared prior predictions of trends from our status and trend models with the realised distributions of trends and variation in trends.
-These comparisons allow us to choose weakly informative priors for the status and trend models that are sufficiently flexible to cover most of the observed variation in trajectories without including significant prior probability for implausible rates of population change or spatial variations in those rates.
+These comparisons allow us to choose weakly informative priors for the status and trend models that are sufficiently flexible to cover most of the observed variation in trajectories without including significant prior probability for implausible rates of population change or regional variations in those rates.
 Specifically, we use these simulations to set priors on the spline parameters and annual fluctuations in the GAMYE, annual differences in the first-difference model, and the variation among regions in these same parameters (both spatially explicit and non-spatial versions).
 
 ```{r load saved figures, echo=FALSE}
@@ -136,7 +136,7 @@ print(sd_overview)
 
 The prior distributions of the standard deviation of trends among regions for a given species generally don't
 
-## Load all of the published BBS and CBC trends for the long-term
+## Detailed methods - compiling the realised trends
 
 The USGS and Audubon publish trend estimates for the long-term, starting in the late 1960s.
 We will use these long-term trend estimates for the regions and time-periods that they are available.
@@ -172,13 +172,13 @@ save(list = c("cbc_trends","bbs_trends"),
 
 ```
 
+## Supplementing the published trends with comparisons between years of population trajectories
+
 To supplement these published trend estimates, we generated additional estimates of trends and variation in trends using the published population trajectories (collection of annual indices of relative abundance).
 These additional estimates of trend are a post-hoc summary of the population trajectories that will not include any assessment of uncertainty.
 For our purposes, the uncertainty of each additional trend estimate is much less important than the full collection of estimates across all time-periods, regions, and species.
-Because we have ignored the uncertainty of the trajectories in our calculations of trends, we have also removed some of the extremely poorly estimated annual indices of abundance from each data collection.
+Because we have ignored the uncertainty of the trajectories in our calculations of trends, we have also removed some of the most poorly estimated annual indices of abundance from each data collection.
 We dropped all estimates of annual abundance that had a coefficient of variation \> 100 (SD/mean \> 100).
-
-## Loading all of the published population trajectories for BBS and CBC
 
 Estimates from the program area available at a number of different spatial scales, but for this analysis, we have selected the survey-wide estimates to represent the broadest species-level estimates, and the state/province estimates to represent the spatial variation within species because of their consistent treatment in the two programs.
 
@@ -229,7 +229,7 @@ save(list = "all_inds",
 
 ```
 
-Using the trajectories, we calculate all possible 1-year, 2-year, 5-year, 10-year, 20-year trends, and 50-year trends with no uncertainty, just the point estimates based on the comparison of posterior medians of annual indices.
+Using the trajectories, we calculate all possible 1-year, 2-year, 5-year, 10-year, 20-year trends, and 50-year trends: the point estimates based on the comparison of posterior medians of annual indices.
 These trends are similar to the end-point trends used in the hierarchical models for the BBS and CBS.
 
 ```{r calculate_trends, eval=FALSE}
