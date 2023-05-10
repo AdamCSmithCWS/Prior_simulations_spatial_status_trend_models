@@ -1,29 +1,291 @@
 ---
-title: "Prior Simulations for status and trend models"
-author: "Adam C. Smith"
-date: "30/03/2023"
+title: "Detailed_prior_sim_methods"
 output: pdf_document
+date: "2023-05-05"
 ---
 
-```{r setup, message=FALSE,echo=FALSE,error=TRUE}
-options(scipen=99999)
-library(tidyverse)
-library(cmdstanr)
-library(mgcv) 
-library(patchwork)
-library(kableExtra)
-library(bbsBayes)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Detailed methods - compiling the realised trends
+
+The USGS and Audubon publish trend estimates for the long-term, starting in the late 1960s.
+We will use these long-term trend estimates for the regions and time-periods that they are available.
+
+```{r trend load, eval=FALSE}
+
+bbs_trends <- read.csv("data/BBS_1966-2019_core_best_trend.csv") %>% 
+  filter(Region == "SU1" |
+           !grepl(x = Region, pattern = "[[:digit:]]")) %>% # state level names do not have numbers, all others do
+  mutate(Region = ifelse(Region == "SU1","Survey_Wide",Region),
+         Survey = "BBS",
+         AOU = as.character(AOU),
+         se_trend = (X97.5.CI - X2.5.CI)/4) %>% 
+  rename(trend = Trend)
+
+
+cbc_trends <- read.csv("data/cbc_trends_abundance_indices_and_scaling_factors_v4.0_web_download_12Apr2022.csv") %>% 
+  filter(grepl(pattern = "RatioTrendAllYears",parameter),
+         (stratum == "USACAN" | 
+            nchar(stratum) == 2)) %>% 
+  select(ebird_com_name,stratum,estimate_mean,estimate_ucl,estimate_lcl,parameter) %>%  
+  rename(AOU = ebird_com_name,
+         Region = stratum,
+         trend = estimate_mean) %>% 
+  mutate(Region = ifelse(Region == "USACAN","Survey_Wide",Region),
+         Survey = "CBC",
+         se_trend = (estimate_ucl-estimate_lcl/4))
+
+
+
+save(list = c("cbc_trends","bbs_trends"),
+     file = "data/CBC_BBS_published_trends.RData")
 
 ```
 
-# Prior Simulation of parameters that control the population trajectories in spatial status and trend models
+## Supplementing the published trends with comparisons between years of population trajectories
 
-## Priors for the annual differences in a first-difference model
-### Priors for the SD of these parameters among strata
+To supplement these published trend estimates, we generated additional estimates of trends and variation in trends using the published population trajectories (collection of annual indices of relative abundance).
+These additional estimates of trend are a post-hoc summary of the population trajectories that will not include any assessment of uncertainty.
+For our purposes, the uncertainty of each additional trend estimate is much less important than the full collection of estimates across all time-periods, regions, and species.
+Because we have ignored the uncertainty of the trajectories in our calculations of trends, we have also removed some of the most poorly estimated annual indices of abundance from each data collection.
+We dropped all estimates of annual abundance that had a coefficient of variation \> 100 (SD/mean \> 100).
+
+Estimates from the program area available at a number of different spatial scales, but for this analysis, we have selected the survey-wide estimates to represent the broadest species-level estimates, and the state/province estimates to represent the spatial variation within species because of their consistent treatment in the two programs.
+
+```{r load trajectories,eval=FALSE}
+
+## downloaded from https://www.mbr-pwrc.usgs.gov/ on June 13 2022
+bbs_inds <- read.csv("data/Index_best_1966-2019_core_best.csv",
+                             colClasses = c("integer",
+                                            "character",
+                                            "integer",
+                                            "numeric",
+                                            "numeric",
+                                            "numeric")) %>% 
+rename(lci = X2.5..CI,
+       uci = X97.5..CI) %>% 
+  mutate(cv = ((uci-lci)/4)/Index ) %>% 
+  select(AOU,Region,Year,Index,cv) %>% 
+  filter(Region == "SU1" |
+           !grepl(x = Region, pattern = "[[:digit:]]")) %>% # state level names do not have numbers, all others do
+  filter(cv < 100,
+         !is.na(cv)) %>%  # drop extremely poorly estimated values
+  mutate(Region = ifelse(Region == "SU1","Survey_Wide",Region),
+         Survey = "BBS",
+         AOU = as.character(AOU))
 
 
-## Priors for the spline parameters in a thin-plate regression spline basis
-### Priors for the SD of these parameters among strata
+# provided by Audubon June 13 2022.
+cbc_file <- "data/cbc_trends_abundance_indices_and_scaling_factors_v4.0_web_download_12Apr2022.csv"
+cbc_inds <- read.csv(cbc_file) %>% 
+  filter(parameter == "AbundanceIndex",
+         (stratum == "USACAN" | 
+            nchar(stratum) == 2)) %>% # selects the state/prov two-letter names
+  mutate(cv = ((estimate_ucl-estimate_lcl)/4)/estimate_median ) %>% 
+select(ebird_com_name,stratum,count_year,estimate_median,cv) %>%  
+rename(AOU = ebird_com_name,
+       Region = stratum,
+       Year = count_year,
+       Index = estimate_median) %>% 
+  filter(cv < 100) %>%  # drop extremely poorly estimated values
+  mutate(Region = ifelse(Region == "USACAN","Survey_Wide",Region),
+         Survey = "CBC",
+         Year = as.integer(Year))
+
+all_inds <- bind_rows(bbs_inds,cbc_inds)
+
+save(list = "all_inds",
+     file = "data/all_state_survey_wide_indices_BBS_CBC.RData")
+
+```
+
+Using the trajectories, we calculate all possible 1-year, 2-year, 5-year, 10-year, 20-year trends, and 50-year trends: the point estimates based on the comparison of posterior medians of annual indices.
+These trends are similar to the end-point trends used in the hierarchical models for the BBS and CBS.
+
+```{r calculate_trends, eval=FALSE}
+
+load("data/all_state_survey_wide_indices_BBS_CBC.RData")
+
+# function to calculate a %/year trend from a count-scale trajectory
+trs <- function(y1,y2,ny){
+  tt <- (((y2/y1)^(1/ny))-1)*100
+}
+
+miny = min(all_inds$Year)
+maxy = max(all_inds$Year)
+all_trends <- NULL
+
+for(tl in c(2,6,11,21,51)){ 
+  #estimating all possible 1-year, 2-year, 5-year, 10-year, 20-year, 
+  # and 50-year trends, with no uncertainty, just the point estimates 
+  #based on the comparison of posterior means fo annual indices
+  ny = tl-1
+  yrs1 <- seq(miny,(maxy-ny),by = 1)
+  yrs2 <- yrs1+ny
+  for(j in 1:length(yrs1)){
+    y2 <- yrs2[j]
+    y1 <- yrs1[j]
+    
+    nyh2 <- paste0("Y",y2)
+    nyh1 <- paste0("Y",y1)
+    
+    tmp <- all_inds %>% 
+      filter(Year %in% c(y1,y2)) %>% 
+      select(AOU,Index,Year,Region,Survey) %>% 
+      pivot_wider(.,names_from = Year,
+                  values_from = Index,
+                  names_prefix = "Y") %>%
+      rename_with(.,~gsub(pattern = nyh2,replacement = "YE", .x)) %>% 
+      rename_with(.,~gsub(pattern = nyh1,replacement = "YS", .x)) %>% 
+      drop_na() %>% 
+      group_by(AOU,Region,Survey) %>% 
+      summarise(trend = trs(YS,YE,ny),
+                .groups = "keep")%>% 
+      mutate(first_year = y1,
+             last_year = y2,
+             nyears = ny,
+             abs_trend = abs(trend),
+             t_years = paste0(ny,"-year trends"))
+    
+    all_trends <- bind_rows(all_trends,tmp)
+  }
+}
+
+
+
+  load("data/CBC_BBS_published_trends.RData")
+
+ 
+  
+  bbs_trends <- bbs_trends %>%
+    rename(trend = Trend) %>% 
+    mutate(abs_trend = abs(trend),
+           t_years = "50-year trends",
+           Survey = "BBS_Pub",
+           AOU = as.character(AOU)) %>% 
+    select(abs_trend,trend,Region,AOU,Survey,t_years)
+  cbc_trends <- cbc_trends %>%
+    rename(trend = Trend) %>%  
+    mutate(abs_trend = abs(trend),
+           t_years = "50-year trends",
+           Survey = "CBC_Pub") %>% 
+    select(abs_trend,trend,Region,AOU,Survey,t_years)
+  
+  all_trends <- all_trends %>% 
+    bind_rows(.,bbs_trends) %>% 
+    bind_rows(.,cbc_trends) %>% 
+  mutate(t_years = factor(t_years,
+                          levels = c("1-year trends",
+                                     "5-year trends",
+                                     "10-year trends",
+                                     "20-year trends",
+                                     "50-year trends"),
+                          ordered = TRUE))
+
+  saveRDS(all_trends,file = "data/all_trends_bbs_cbc.rds")
+
+```
+
+## Realised distribution of all trend estimates from CBC and BBS
+
+The distribution of survey wide trend estimates for CBC and BBS data.
+
+```{r plotting all sw trends}
+
+all_trends <- readRDS("data/all_trends_bbs_cbc.rds")
+all_continental_trends <- all_trends %>% 
+  filter(Region == "Survey_Wide")
+mxabs = 2000#quantile(all_trends$abs_trend,0.9999) - facilitates setting breaks
+
+
+realised_all_sw_freq <- ggplot(data = all_continental_trends,
+                                 aes(abs_trend,after_stat(density),
+                                     group = Survey,
+                                        colour = Survey))+
+  geom_freqpoly(breaks = c(0,seq(0.5,mxabs,0.5)),center = 0)+
+  xlab("Absolute value of survey-wide trends USGS and Audubon models (1966-2019)")+
+  ylab("")+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             nrow = 1,
+             ncol = 5)
+print(realised_all_sw_freq)
+
+```
+
+The realised distribution of all state/provincial trend estimates for BBS and CBC.
+
+```{r plotting trends by stateprov}
+
+
+
+#selecting the province/state level trends to assess spatial variation
+all_politic_trends <- all_trends %>% 
+  filter(Region != "Survey_Wide")
+
+
+
+realised_all_politic_freq <- ggplot(data = all_politic_trends,
+                                 aes(abs_trend,after_stat(density),
+                                     group = Survey,
+                                        colour = Survey))+
+  geom_freqpoly(breaks = c(0,seq(0.5,mxabs,0.5)),center = 0)+
+  xlab("Absolute value of state/province trends USGS and Audubon models")+
+  ylab("")+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             nrow = 1,
+             ncol = 5)
+print(realised_all_politic_freq)
+
+```
+
+## Examining the variation among regions within a given species
+
+The published estimates of trends can also inform our prior expectations on the variation among regions in population trends at different temporal scales.
+
+```{r calculate variation in trends}
+all_sd_trends <- all_politic_trends %>%
+  filter(!(t_years == "1-year trends" & Survey == "CBC"),
+         t_years != "5-year trends") %>% 
+  group_by(AOU,t_years,Survey) %>% 
+  summarise(sd_trends = sd(trend,na.rm = TRUE),
+            min_trend = min(trend,na.rm = TRUE),
+            max_trend = max(trend,na.rm = TRUE),
+            q5_trend = quantile(trend,0.05,na.rm = TRUE),
+            q95_trend = quantile(trend,0.95,na.rm = TRUE),
+            .groups = "keep") %>% 
+  filter(is.finite(sd_trends))
+
+realised_all_sd <- ggplot(data = all_sd_trends,
+                                    aes(sd_trends,after_stat(density),
+                                        group = Survey,
+                                        colour = Survey))+
+  geom_freqpoly(breaks = c(0,seq(0.5,mxabs,0.5)),center = 0)+
+  xlab("SD (by species) of state/province trends USGS and Audubon models (1966-2019)")+
+  ylab("")+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             nrow = 1,
+             ncol = 5)
+print(realised_all_sd)
+
+
+```
+
+## Prior Simulation for the flexibility of the overall population trajectories
+
+
+### Setting up the basic data structure using Wood Thrush
 
 ```{r simulated_condictions, include=FALSE, echo=FALSE}
 
@@ -135,7 +397,8 @@ data_diff <- list(
 
 ```
 
-
+### Fitting the prior models
+the following code fits a customized set of Stan models that estimate the population trajectories and trends based on the priors.
 
 ```{r simulations,eval=FALSE}
 
@@ -194,14 +457,7 @@ for(i in 1:nrow(tb_sims)){
       ## compile model
       model <- cmdstan_model(mod_file)
       
-      
-      # Initial Values ----------------------------------------------------------
-      
-      
-      # init_def <- function(){ list(sdbeta = runif(nyears_m1,0.01,0.1),
-      #                              beta_raw = matrix(rnorm(nyears_m1*nstrata,0,0.01),nrow = nstrata,ncol = nyears_m1),
-      #                              sdBETA = runif(1,0.01,0.1),
-      #                              BETA_raw = rnorm(nyears_m1,0,0.01))}
+ 
       
       stanfit <- model$sample(
         data=stan_data,
@@ -226,12 +482,6 @@ for(i in 1:nrow(tb_sims)){
 
 
 ```
-
-
-
-
-
-
 
 We then summarized the estimated trajectories as well as the 1, 5, 10, 20, and 50-year trends simulated from the alternative priors.
 
@@ -295,9 +545,6 @@ nsmooth_samples <- posterior_samples(stanfit,
                                  dims = c("strat","Year_Index"))
   
 
-# N_samples <- posterior_samples(stanfit,
-#                                  parm = "NSMOOTH",
-#                                  dims = c("Year_Index"))
 
 }
 
@@ -442,10 +689,6 @@ saveRDS(summ_out,file = "output/prior_sim_summaries.rds")
 
 ```
 
-
-
-
-
 ```{r plotting_trends}
 
 # loading the stored realised BBS and CBC trend estimates
@@ -584,73 +827,106 @@ saveRDS(realised_all_politic_freq,
         "output/realised_all_politic_freq.rds")
 
 
+
+
 ```
 
-The code above plots the realised distribution of trends across the full time series of the BBS and CBC (black lines) along with the distribution of trends using the various priors used in the models in this paper. 
+The code above plots the realised distribution of trends across the full time series of the BBS and CBC (black lines) along with the distribution of trends using the various priors used in the models in this paper.
 
-\newpage 
+\newpage
 
-### gamye non spatial
-The survey wide trends, both full trajectory and the smooth only, from the gamye non-spatial model using half t-distribution with 0 mean, sd = `r tb_sims[1,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the spline parameters that control the wiggliness of the mean population smooth, and a standard normal prior for wiggliness of the strata-level smooths. The standard deviation of the year-effects were given a gamma prior with shape parameter = 2 and scale parameter = `r tb_sims[1,"prior_yeareffects"]`. 
-```{r gamye plot 1a, echo=FALSE}
-realised_all_politic_freq <- readRDS("output/realised_all_politic_freq.rds")
-realised_all_sw_freq <- readRDS("output/realised_all_sw_freq.rds")
+```{r overview plots}
 
-print(realised_all_sw_freq[[1]])
+  tmp_sim <- prior_trends_sw %>% 
+    filter(t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends"),
+           type == "full") %>% 
+  mutate(Model = gsub(model_type,
+                      pattern = "_",
+                      replacement = "-"))
+
+
+
+
+sub_sw_trends <- all_sw_trends %>% 
+    filter(t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends"))
+sw_overview <- ggplot(data = sub_sw_trends,
+                                 aes(abs_trend,after_stat(density)))+
+    geom_histogram(breaks = c(0,seq(0.5,mxabs,0.5)),
+              colour = grey(0.5))+
+  geom_freqpoly(data = tmp_sim,
+                aes(abs_trend,after_stat(density),
+                colour = Model),
+                inherit.aes = FALSE,
+                breaks = c(0,seq(0.5,mxabs,0.5)),center = 0)+
+  scale_colour_viridis_d(begin = 0.2)+
+  xlab("Absolute value of survey wide trends")+
+  ylab("")+
+  labs(title = paste0("Simulated survey wide prior trends"))+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             ncol = 5) 
+
+sw_overview
+
+
+
+saveRDS(sw_overview,
+        "output/survey_wide_overview.rds")
+
+
+  tmp_sim <- prior_trends_politic%>% 
+    filter(t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends"),
+           type == "full") %>% 
+  mutate(Model = gsub(model_type,
+                      pattern = "_",
+                      replacement = "-"))
+  
+  
+
+sub_politic_trends <- all_politic_trends %>% 
+    filter(t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends"))
+
+geo_overview <- ggplot(data = sub_politic_trends,
+                                 aes(abs_trend,after_stat(density)))+
+    geom_histogram(breaks = c(0,seq(0.5,mxabs,0.5)),
+              colour = grey(0.5))+
+  geom_freqpoly(data = tmp_sim,
+                aes(abs_trend,after_stat(density),
+                colour = Model),
+                inherit.aes = FALSE,
+                breaks = c(0,seq(0.5,mxabs,0.5)),center = 0)+
+  scale_colour_viridis_d(begin = 0.2)+
+  xlab("Absolute value of state/province trends")+
+  ylab("")+
+  labs(title = paste0("Simulated state/province prior trends"))+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             ncol = 5) 
+
+geo_overview
+
+
+
+
+
+saveRDS(geo_overview,
+        "output/state_province_overview.rds")
+
+
+
 ```
-```{r gamye plot 1b, echo=FALSE}
-print(realised_all_politic_freq[[1]])
-```
-
-
-\newpage 
-
-### gamye spatial
-The survey wide trends, both full trajectory and the smooth only, from the spatial version of the gamye model using half t-distribution with 0 mean, sd = `r tb_sims[2,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the spline parameters that control the wiggliness of the mean population smooth, and a standard normal prior for the spatial variation among strata on the spline parameters. The standard deviation of the year-effects were given a gamma prior with shape parameter = 2 and scale parameter = `r tb_sims[2,"prior_yeareffects"]`. 
-```{r gamye plot 2a, echo=FALSE}
-print(realised_all_sw_freq[[2]])
-```
-```{r gamye plot 2b, echo=FALSE}
-print(realised_all_politic_freq[[2]])
-```
-
-
-\newpage 
-
-### first difference non hierarchical
-The survey wide trends, from the non hierarchical version of the first difference model using half t-distribution with 0 mean, sd = `r tb_sims[3,"prior_sd_time"]`, and 3 degrees of freedom for the standard deviation of the annual differences in abundance in a given stratum. 
-```{r gamye plot 3a, echo=FALSE}
-print(realised_all_sw_freq[[3]])
-```
-```{r gamye plot 3b, echo=FALSE}
-print(realised_all_politic_freq[[3]])
-```
-
-
-\newpage 
-
-### first difference non spatial
-The survey wide trends, from the non spatial version of the first difference model using half t-distribution with 0 mean, sd = `r tb_sims[4,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the mean overall annual differences in abundance, and a half t-distribution with a sd = `r tb_sims[4,"prior_sd_time"]` on the variation among strata in the differences. 
-```{r gamye plot 4a, echo=FALSE}
-print(realised_all_sw_freq[[4]])
-```
-```{r gamye plot 4b, echo=FALSE}
-print(realised_all_politic_freq[[4]])
-```
-
-
-\newpage 
-
-### first difference non spatial
-The survey wide trends, from the non spatial version of the first difference model using half t-distribution with 0 mean, sd = `r tb_sims[5,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the mean overall annual differences in abundance, and a half t-distribution with a sd = `r tb_sims[5,"prior_sd_time"]` on the spatial variation among strata on the differences. 
-```{r gamye plot 5a, echo=FALSE}
-print(realised_all_sw_freq[[5]])
-```
-```{r gamye plot 5b, echo=FALSE}
-print(realised_all_politic_freq[[5]])
-```
-
-\newpage 
 
 ## Exploring the standard deviation of trends among regions
 
@@ -667,6 +943,7 @@ all_politic_trends <- all_trends %>%
 realised_all_sd_freq <- vector(mode = "list",length = length(mod_types))
 names(realised_all_sd_freq) <- mod_types
 
+#function to calculate the inter-quartile interval
 iq_func <- function(x,q = 0.5){
   q1 <- (1-q)/2
   q2 <- 1-q1
@@ -690,11 +967,22 @@ all_politic_sdtrends <- all_politic_trends %>%
                           ordered = TRUE)) 
 
 
-tmp <- all_politic_sdtrends %>% 
-  filter(t_years == "50-year trends")
+BBS_politic_sdtrends <- all_politic_trends %>% 
+  filter(Survey %in% c("BBS")) %>% 
+  group_by(Survey,AOU,first_year,last_year,nyears) %>% 
+  summarise(sd_trend = sd(trend),
+            iq_range = iq_func(trend)) %>% 
+  mutate(t_years = paste(nyears,"year trends",sep = "-"),
+         t_years = factor(t_years,
+                          levels = c("1-year trends",
+                                     "5-year trends",
+                                     "10-year trends",
+                                     "20-year trends",
+                                     "50-year trends"),
+                          ordered = TRUE)) 
 
-plot(tmp$sd_trend,tmp$iq_range)
-abline(0,1)
+
+
 
 ## loading the prior simulated trends for all models
 trends_out <- readRDS("output/prior_sim_trends.rds")
@@ -724,12 +1012,12 @@ for(i in 1:length(mod_types)){
   tmp_sim <- prior_sdtrends_politic %>% 
     filter(model_type == mm)
 tmp <- ggplot(data = all_politic_sdtrends,
-                                 aes(iq_range,after_stat(density),
+                                 aes(sd_trend,after_stat(density),
                                      groups = Survey))+
   geom_freqpoly(breaks = c(seq(-mxabs,mxabs,0.5)),center = 0,
               colour = grey(0.5))+
   geom_freqpoly(data = tmp_sim,
-    aes(iq_range,after_stat(density),
+    aes(sd_trend,after_stat(density),
     colour = model_type),
     inherit.aes = FALSE,
     breaks = c(seq(-mxabs,mxabs,0.5)),center = 0)+
@@ -754,47 +1042,77 @@ realised_all_sd_freq[[mm]] <- tmp
 
 }
 
-
-```
-
-
-The code above plots the realised distribution of the standard deviation of trends among regions within species for all possible time-windows across the full time series of the BBS and CBC (black lines) along with the distribution of standard deviation of trends from the various priors used in the models in this paper. 
-
-\newpage 
-
-### gamye non spatial
-The survey wide trends, both full trajectory and the smooth only, from the gamye non-spatial model using half t-distribution with 0 mean, sd = `r tb_sims[1,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the spline parameters that control the wiggliness of the mean population smooth, and the same prior for wiggliness of the strata-level smooths. The standard deviation of the year-effects were given a gamma prior with shape parameter = 2 and scale parameter = `r tb_sims[1,"prior_yeareffects"]`. 
-```{r gamye sdplot 1a}
-print(realised_all_sd_freq[[1]])
-```
+saveRDS(realised_all_sd_freq,
+        "output/realised_all_sd_freq.rds")
 
 
-\newpage 
 
-### gamye spatial
-The survey wide trends, both full trajectory and the smooth only, from the spatial version of the gamye model using half t-distribution with 0 mean, sd = `r tb_sims[2,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the spline parameters that control the wiggliness of the mean population smooth, and the same prior for the spatial variation among strata on the spline parameters. The standard deviation of the year-effects were given a gamma prior with shape parameter = 2 and scale parameter = `r tb_sims[2,"prior_yeareffects"]`. 
-```{r gamye sdplot 2a}
-print(realised_all_sd_freq[[2]])
-```
+## overview plot
 
+ tmp_sim <- prior_sdtrends_politic %>% 
+    filter(((type == "full" & model == "first_difference")|
+              (type == "full" & model == "gamye")),
+           t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends")) %>% 
+   mutate(Model = gsub("_","-",model_type))
+ 
+ sub_politic_sdtrends <- all_politic_sdtrends %>% 
+      filter(t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends"))
+ 
+sd_overview <- ggplot(data = sub_politic_sdtrends,
+                                 aes(sd_trend,after_stat(density)))+
+  geom_histogram(breaks = c(seq(0,mxabs,0.5)),
+              colour = grey(0.5))+
+  geom_freqpoly(data = tmp_sim,
+    aes(sd_trend,after_stat(density),
+    colour = Model),
+    inherit.aes = FALSE,
+    breaks = c(seq(0,mxabs,0.5)),center = 0)+
+  scale_colour_viridis_d(begin = 0.2)+
+  xlab("SD of survey wide trends")+
+  ylab("")+
+  labs(title = paste0("SD of simulated prior trends among regions"))+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             ncol = 5) 
 
-\newpage 
+saveRDS(sd_overview,"output/sd_overview.rds")
 
+ sub_politic_sdtrends <- BBS_politic_sdtrends %>% 
+      filter(t_years %in% c("1-year trends",
+                          "10-year trends",
+                          "50-year trends"))
  
 
-### first difference non spatial
-The survey wide trends, from the non spatial version of the first difference model using half t-distribution with 0 mean, sd = `r tb_sims[4,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the mean overall annual differences in abundance, and a half t-distribution with a sd = `r tb_sims[4,"prior_sd_time"]` on the variation among strata in the differences. 
-```{r gamye sdplot 4a}
-print(realised_all_sd_freq[[4]])
+sd_overview_bbs <- ggplot(data = sub_politic_sdtrends,
+                                 aes(sd_trend,after_stat(density)))+
+  geom_histogram(breaks = c(seq(0,mxabs,0.5)),
+              colour = grey(0.5))+
+  geom_freqpoly(data = tmp_sim,
+    aes(sd_trend,after_stat(density),
+    colour = Model),
+    inherit.aes = FALSE,
+    breaks = c(seq(0,mxabs,0.5)),center = 0)+
+  scale_colour_viridis_d(begin = 0.2)+
+  xlab("SD of survey wide trends")+
+  ylab("")+
+  labs(title = paste0("SD of simulated prior trends among regions"))+
+  theme_bw()+
+  coord_cartesian(ylim = c(0,0.7),
+                  xlim = c(0,40))+
+  facet_wrap(vars(t_years),
+             ncol = 5) 
+
+saveRDS(sd_overview_bbs,"output/sd_overview_bbs.rds")
+
+
+
 ```
 
-
-\newpage 
-
-### first difference non spatial
-The survey wide trends, from the non spatial version of the first difference model using half t-distribution with 0 mean, sd = `r tb_sims[5,"prior_time"]`, and 3 degrees of freedom for the standard deviation of the mean overall annual differences in abundance, and a half t-distribution with a sd = `r tb_sims[5,"prior_sd_time"]` on the spatial variation among strata on the differences. 
-```{r gamye sdplot 5a}
-print(realised_all_sd_freq[[5]])
-```
 
 
